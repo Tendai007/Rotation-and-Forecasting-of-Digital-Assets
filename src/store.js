@@ -50,6 +50,86 @@ const dbRowToApp = (table, row) => {
 
 const toDb = (obj) => Object.fromEntries(Object.entries(obj).map(([k, v]) => [k.toLowerCase(), v]));
 
+const normalizeTableRows = (table, rows) => {
+  if (!Array.isArray(rows)) return [];
+  return rows.map(row => dbRowToApp(table, row));
+};
+
+const applyCollection = (callback, fallback, rows) => {
+  const nextRows = normalizeTableRows('users', rows);
+  if (typeof callback === 'function') {
+    callback(nextRows.length > 0 ? nextRows : fallback);
+  }
+};
+
+const upsertCollectionItem = (callback, table, row, fallback) => {
+  const nextRow = dbRowToApp(table, row);
+  if (typeof callback !== 'function') {
+    return;
+  }
+
+  callback(prev => {
+    const current = Array.isArray(prev) ? prev : fallback;
+    const index = current.findIndex(item => item.id === nextRow.id);
+    if (index === -1) {
+      return [...current, nextRow];
+    }
+
+    const updated = [...current];
+    updated[index] = nextRow;
+    return updated;
+  });
+};
+
+const removeCollectionItem = (callback, table, id, fallback) => {
+  if (typeof callback !== 'function') {
+    return;
+  }
+
+  callback(prev => {
+    const current = Array.isArray(prev) ? prev : fallback;
+    return current.filter(item => item.id !== id);
+  });
+};
+
+const subscribeTable = (table, callback, fallbackData) => {
+  if (!isSupabaseEnabled || !supabase) {
+    callback(fallbackData);
+    return () => {};
+  }
+
+  const refresh = async () => {
+    const { data, error } = await supabase.from(table).select('*');
+    if (error || !data) {
+      callback(fallbackData);
+      return;
+    }
+
+    const appData = normalizeTableRows(table, data);
+    callback(appData.length > 0 ? appData : fallbackData);
+  };
+
+  refresh();
+
+  const channel = supabase.channel(`${table}-changes`)
+    .on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
+      if (payload.eventType === 'INSERT') {
+        upsertCollectionItem(callback, table, payload.new, fallbackData);
+      } else if (payload.eventType === 'UPDATE') {
+        upsertCollectionItem(callback, table, payload.new, fallbackData);
+      } else if (payload.eventType === 'DELETE') {
+        removeCollectionItem(callback, table, payload.old.id, fallbackData);
+      }
+    })
+    .subscribe();
+
+  return () => {
+    if (channel) {
+      supabase.removeChannel(channel);
+    }
+  };
+};
+
 // ─── SEED DATA ──────────────────────────────────────────────
 export const SEED_EQUIPMENT = [
   // Laptops
@@ -136,77 +216,13 @@ export const seedDatabase = async () => {
   }
 };
 
-export const subscribeEquipment = (callback) => {
-  if (!isSupabaseEnabled || !supabase) {
-    callback(SEED_EQUIPMENT);
-    return () => {};
-  }
+export const subscribeEquipment = (callback) => subscribeTable('equipment', callback, SEED_EQUIPMENT);
 
-  supabase.from('equipment').select('*').then(({ data, error }) => {
-    if (error || !data) {
-      callback(SEED_EQUIPMENT);
-      return;
-    }
-    const appData = data.map(r => dbRowToApp('equipment', r));
-    callback(fallback(appData, SEED_EQUIPMENT));
-  }).catch(() => callback(SEED_EQUIPMENT));
+export const subscribeBookings = (callback) => subscribeTable('bookings', callback, SEED_BOOKINGS);
 
-  return () => {};
-};
+export const subscribeQueue = (callback) => subscribeTable('queue', callback, SEED_QUEUE);
 
-export const subscribeBookings = (callback) => {
-  if (!isSupabaseEnabled || !supabase) {
-    callback(SEED_BOOKINGS);
-    return () => {};
-  }
-
-  supabase.from('bookings').select('*').then(({ data, error }) => {
-    if (error || !data) {
-      callback(SEED_BOOKINGS);
-      return;
-    }
-    const appData = data.map(r => dbRowToApp('bookings', r));
-    callback(fallback(appData, SEED_BOOKINGS));
-  }).catch(() => callback(SEED_BOOKINGS));
-
-  return () => {};
-};
-
-export const subscribeQueue = (callback) => {
-  if (!isSupabaseEnabled || !supabase) {
-    callback(SEED_QUEUE);
-    return () => {};
-  }
-
-  supabase.from('queue').select('*').then(({ data, error }) => {
-    if (error || !data) {
-      callback(SEED_QUEUE);
-      return;
-    }
-    const appData = data.map(r => dbRowToApp('queue', r));
-    callback(fallback(appData, SEED_QUEUE));
-  }).catch(() => callback(SEED_QUEUE));
-
-  return () => {};
-};
-
-export const subscribeUsers = (callback) => {
-  if (!isSupabaseEnabled || !supabase) {
-    callback(SEED_USERS);
-    return () => {};
-  }
-
-  supabase.from('users').select('*').then(({ data, error }) => {
-    if (error || !data) {
-      callback(SEED_USERS);
-      return;
-    }
-    const appData = data.map(r => dbRowToApp('users', r));
-    callback(fallback(appData, SEED_USERS));
-  }).catch(() => callback(SEED_USERS));
-
-  return () => {};
-};
+export const subscribeUsers = (callback) => subscribeTable('users', callback, SEED_USERS);
 
 export const addBooking = async (booking) => {
   const id = `b${Date.now()}`;

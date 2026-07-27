@@ -16,7 +16,7 @@ function Modal({ title, children, onClose }) {
 }
 
 export default function Users() {
-  const { users, setUsers, bookings, addNotification } = useApp();
+  const { users, setUsers, bookings, addNotification, isSupabaseEnabled } = useApp();
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
@@ -31,7 +31,9 @@ export default function Users() {
   const handleAdd = async () => {
     if (!form.name || !form.email) { alert('Name and email required'); return; }
     const user = await addUser(form);
-    setUsers(prev => [...prev, user]);
+    if (!isSupabaseEnabled) {
+      setUsers(prev => [...prev, user]);
+    }
     addNotification({ type: 'confirmed', message: `${form.name} registered` }, user.id);
     setShowModal(false);
     setForm({ name: '', email: '', phone: '', role: 'borrower' });
